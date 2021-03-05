@@ -1,0 +1,20 @@
+version: '3'
+
+services:
+  middleware:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: acs-middleware
+    container_name: acs-middleware
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/var/www/html/acs-middleware
+    networks:
+      - acs-api_app-network
+
+networks:
+  acs-api_app-network:
+    external: true

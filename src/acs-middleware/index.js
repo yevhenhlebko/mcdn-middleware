@@ -25,7 +25,7 @@ const printError = function (err) {
 function printLongText(longtext) {
   let offset = 0
 
-  while(offset < longtext.length) {
+  while (offset < longtext.length) {
     console.log(longtext.slice(offset, offset + 30))
     offset += 30
   }
@@ -39,7 +39,7 @@ function buildInsert(table) {
 }
 
 const printMessage = async function (message) {
-  let offset = 0;
+  let offset = 0
 
   function converter(buff, start, len) {
     const slicedBuff = buff.slice(start, start + len)
@@ -90,7 +90,7 @@ const printMessage = async function (message) {
     return ret
   }
 
-  let deviceId = message.annotations['iothub-connection-device-id']
+  const deviceId = message.annotations['iothub-connection-device-id']
 
   if (!Buffer.isBuffer(message.body)) {
     if (message.body.cmd === 'status') {
@@ -183,7 +183,7 @@ const printMessage = async function (message) {
       const deviceType = converter(message.body, offset, 2) // device type - (03 f3) -> (1011)
       const deviceSerialNumber = converter(message.body, offset, 4) // device serial number
       
-      const machine = json_machines.find((machine) => machine.device_type == deviceType)
+      const machine = json_machines.find((machine) => machine.device_type === deviceType)
 
       machineId = machine ? machine.id : 11
 
@@ -237,7 +237,8 @@ const printMessage = async function (message) {
         const queryValuesWithoutTimeData = [deviceId, machineId, val.id, group.timestamp, JSON.stringify(val.values), deviceSerialNumber]  // queryValues for others
 
         let tagObj = null
-        try {
+
+        try { // eslint-disable-next-line
           tagObj = tags.find((tag) => parseInt(tag.configuration_id) === parseInt(machineId) && parseInt(tag.tag_id) === parseInt(val.id))
         } catch (error) {
           console.log('Qeury from tags table failed.')
@@ -254,7 +255,7 @@ const printMessage = async function (message) {
         }
 
         // check if the tag is alarms
-        try {
+        try { // eslint-disable-next-line
           res = await db.query('SELECT * FROM alarm_types WHERE machine_id = $1 AND tag_id = $2', [machineId, val.id])
         } catch (error) {
           console.log('Qeury from tags table failed.')

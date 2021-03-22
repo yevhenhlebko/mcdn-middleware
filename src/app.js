@@ -13,14 +13,14 @@ app.use(cors())
 app.use(bodyParser.json())
 app.use(bodyParser.urlencoded({ extended: false }))
 
-const Sentry = require("@sentry/node");
-const Tracing = require("@sentry/tracing");
+const Sentry = require('@sentry/node')
+const Tracing = require('@sentry/tracing')
 
 Sentry.init({
-  dsn: "https://3b9791a8547949d89f696bffb6ab47ee@o500701.ingest.sentry.io/5580915",
+  dsn: 'https://3b9791a8547949d89f696bffb6ab47ee@o500701.ingest.sentry.io/5580915',
 
-  tracesSampleRate: 1.0,
-});
+  tracesSampleRate: 1.0
+})
 
 db.connect().then((response) => {
   // Start capturing events

@@ -1,6 +1,5 @@
-const { EventHubClient, EventData, EventPosition, OnMessage, OnError, MessagingError } = require('@azure/event-hubs')
-const { connectionString, senderConnectionString } = require('../config')
-const moment = require('moment')
+const { EventHubConsumerClient, earliestEventPosition } = require('@azure/event-hubs')
+const { consumerGroup, connectionString, eventHubName, senderString } = require('../config')
 const pgFormat = require('pg-format')
 const Pusher = require('pusher')
 const { pusherAppId, pusherKey, pusherSecret, pusherCluster, pusherUseTLS } = require('../config')
@@ -16,7 +15,6 @@ const pusher = new Pusher({
 
 let json_machines
 let tags
-let machineId
 
 const printError = function (err) {
   console.log(err.message)
@@ -39,6 +37,7 @@ function buildInsert(table) {
 }
 
 const printMessage = async function (message) {
+  const deviceId = message.systemProperties['iothub-connection-device-id']  
   let offset = 0
 
   function converter(buff, start, len) {
@@ -56,7 +55,7 @@ const printMessage = async function (message) {
         ret = slicedBuff.readUInt32BE()
       }
     } catch (err) {
-      console.log(err)
+      console.log('teltonika-id:', deviceId, 'error:', err)
       console.log(buff)
     }
 
@@ -82,15 +81,13 @@ const printMessage = async function (message) {
         return slicedBuff.readUInt32BE()
       }
     } catch (error) {
-      console.log(error)
+      console.log('tetonika-id: ', deviceId, 'error: ', error)
       console.log(type, len, start)
       printLongText(buff)
     }
 
     return ret
   }
-
-  const deviceId = message.annotations['iothub-connection-device-id']
 
   if (!Buffer.isBuffer(message.body)) {
     if (message.body.cmd === 'status') {
@@ -108,7 +105,7 @@ const printMessage = async function (message) {
             console.log('device configuration added')
           }
 
-          console.log(message.body)
+          console.log('teltonika-id:', deviceId, message.body)
         }
       } catch (err) {
         console.log(err)
@@ -183,9 +180,9 @@ const printMessage = async function (message) {
       const deviceType = converter(message.body, offset, 2) // device type - (03 f3) -> (1011)
       const deviceSerialNumber = converter(message.body, offset, 4) // device serial number
       
-      const machine = json_machines.find((machine) => machine.device_type === deviceType)
+      const machine = json_machines.find((item) => item.device_type === deviceType)
 
-      machineId = machine ? machine.id : 11
+      const machineId = machine ? machine.id : 11
 
       group.values = []
 
@@ -206,13 +203,14 @@ const printMessage = async function (message) {
         const numOfElements = converter(message.body, offset, 1) // Array size
         const byteOfElement = converter(message.body, offset, 1) // Element size
 
-        let plctag
+        let plctag = false
 
         for (let i = 0; i < numOfElements; i++) {
           if (val.id === 32769) {
             val.values.push(getTagValue(message.body, offset, byteOfElement, 'bool'))
           } else {
             plctag = json_machines[machineId - 1].full_json.plctags.find((tag) => {
+              
               return tag.id === val.id
             })
 
@@ -222,7 +220,7 @@ const printMessage = async function (message) {
               val.values.push(getTagValue(message.body, offset, byteOfElement, type))
             } else {
               printLongText(message.body)
-              console.log('Can\'t find tag', val.id, machineId)
+              console.log('Can\'t find tag', val.id, 'machine-id:', machineId, 'teltonika-id:', deviceId)
 
               return
             }
@@ -231,8 +229,8 @@ const printMessage = async function (message) {
         
         const date = new Date(group.timestamp * 1000)
 
-        console.log('teltonika-id:', deviceId, 'Plc Serial Number', deviceSerialNumber, 'tag id:', val.id, 'timestamp:', date.toISOString(), 'configuration:', machineId, plctag.name, 'values:', JSON.stringify(val.values))
-
+        console.log('teltonika-id:', deviceId, 'Plc Serial Number', deviceSerialNumber, 'tag id:', val.id, 'timestamp:', date.toISOString(), 'configuration:', machineId, plctag.name, 'values:', JSON.stringify(val.values), 'machineID', machineId)
+        
         const queryValuesWithTimeData = [deviceId, machineId, val.id, group.timestamp, JSON.stringify(val.values), date.toISOString(), deviceSerialNumber]  // queryValues for device_data and alarms
         const queryValuesWithoutTimeData = [deviceId, machineId, val.id, group.timestamp, JSON.stringify(val.values), deviceSerialNumber]  // queryValues for others
 
@@ -347,19 +345,33 @@ module.exports = {
 
     tags = await getTags()
 
-    let ehClient
+    const client = new EventHubConsumerClient(
+      consumerGroup,
+      connectionString,
+      eventHubName
+    )
 
-    EventHubClient.createFromIotHubConnectionString(connectionString).then((client) => {
-      console.log('Successully created the EventHub Client from iothub connection string.')
-      ehClient = client
+    const partitionIds = await client.getPartitionIds()
 
-      return ehClient.getPartitionIds()
-    }).then((ids) => {
-      console.log('The partition ids are: ', ids)
+    const subscriptionOptions = {
+      startPosition: earliestEventPosition
+    }
 
-      return ids.map((id) => {
-        return ehClient.receive(id, printMessage, printError, { eventPosition: EventPosition.fromEnqueuedTime(Date.now()) })
-      })
-    }).catch(printError)
+    partitionIds.map((id) => {
+      return client.subscribe(
+        id,
+        {
+          processEvents: async(events, context) => {
+            // event processing code goes here
+            printMessage(events[0])
+          },
+          processError: async(err, context) => {
+            // error reporting/handling code here
+            printError(err)
+          }
+        },
+        subscriptionOptions
+      )
+    })
   }
 }

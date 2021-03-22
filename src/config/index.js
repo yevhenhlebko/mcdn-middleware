@@ -4,8 +4,10 @@ dotenv.config()
 module.exports = {
   endpoint: process.env.API_URL,
   port: process.env.PORT,
-  connectionString: process.env.IOTHUB_CONNECTION_STRING,
-  senderConnectionString: process.env.IOTHUB_SENDER_CONNECTION_STRING,
+  consumerGroup: process.env.CONSUMER_GROUP,
+  connectionString: process.env.CONNECTION_STRING,
+  eventHubName: process.env.EVENTHUB_NAME,
+  senderString: process.env.IOTHUB_SENDER_CONNECTION_STRING,
   db_host: process.env.DB_HOST,
   db_user: process.env.DB_USER,
   db_database: process.env.DB_DATABASE,

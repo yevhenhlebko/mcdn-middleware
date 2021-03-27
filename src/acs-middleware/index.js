@@ -1,5 +1,5 @@
-const { EventHubConsumerClient, earliestEventPosition } = require('@azure/event-hubs')
-const { consumerGroup, connectionString, eventHubName, senderString } = require('../config')
+const { EventHubConsumerClient, EventHubProducerClient, earliestEventPosition } = require('@azure/event-hubs')
+const { iotConsumerGroup, iotHubConnectionString, iotHubName, eventHubSenderConnectionString } = require('../config')
 const pgFormat = require('pg-format')
 const Pusher = require('pusher')
 const { pusherAppId, pusherKey, pusherSecret, pusherCluster, pusherUseTLS } = require('../config')
@@ -12,6 +12,11 @@ const pusher = new Pusher({
   cluster: pusherCluster,
   useTLS: pusherUseTLS
 })
+
+// This is the connection string for EventHub. We use this to push processed data for data mining.
+const senderClient = new EventHubProducerClient(
+  eventHubSenderConnectionString
+)
 
 let json_machines
 let tags
@@ -37,7 +42,16 @@ function buildInsert(table) {
 }
 
 const printMessage = async function (message) {
-  const deviceId = message.systemProperties['iothub-connection-device-id']  
+  let deviceId = 0
+
+  if (!message) {
+    // message has an error
+    console.log('Received incorrect message format')
+
+    return
+  } else {
+    deviceId = message.systemProperties['iothub-connection-device-id']
+  }
   let offset = 0
 
   function converter(buff, start, len) {
@@ -71,6 +85,8 @@ const printMessage = async function (message) {
     try {
       if (type === 'bool') {
         return !!(slicedBuff.readUInt8())
+      } else if (type === 'uint8') {
+        return slicedBuff.readUint8()
       } else if (type === 'int16') {
         return slicedBuff.readInt16BE()
       } else if (type === 'uint16') {
@@ -210,7 +226,6 @@ const printMessage = async function (message) {
             val.values.push(getTagValue(message.body, offset, byteOfElement, 'bool'))
           } else {
             plctag = json_machines[machineId - 1].full_json.plctags.find((tag) => {
-              
               return tag.id === val.id
             })
 
@@ -273,7 +288,21 @@ const printMessage = async function (message) {
         }
         
         rowsToInsert.push(queryValuesWithTimeData)
+
+        sendingData.push({
+          body: {
+            'seerialNo': deviceSerialNumber,
+            'tagId': val.id,
+            'values': val.values
+          }
+        })
       }
+    }
+
+    try {
+      await senderClient.sendBatch(sendingData)
+    } catch (error) {
+      console.log(error, 'Sending failed.')
     }
 
     try {
@@ -345,10 +374,11 @@ module.exports = {
 
     tags = await getTags()
 
+    //This is the connection string for IoThub. We use this to receive data from the devices using dedicated consumer client.
     const client = new EventHubConsumerClient(
-      consumerGroup,
-      connectionString,
-      eventHubName
+      iotConsumerGroup,
+      iotHubConnectionString,
+      iotHubName
     )
 
     const partitionIds = await client.getPartitionIds()
@@ -367,7 +397,7 @@ module.exports = {
           },
           processError: async(err, context) => {
             // error reporting/handling code here
-            printError(err)
+            printError(err, context)
           }
         },
         subscriptionOptions

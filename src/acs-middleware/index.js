@@ -109,16 +109,30 @@ const printMessage = async function (message) {
     if (message.body.cmd === 'status') {
       try {
         if (message.body.status === 'Ok') {
-          res = await db.query('SELECT * FROM device_configurations WHERE teltonika_id = $1', [deviceId])
+          if (message.body.plc.status === 'No connection with PLC' && message.body.tcu && message.body.tcu.link_state === 1) {
+            res = await db.query('SELECT * FROM device_configurations WHERE teltonika_id = $1', [deviceId])
 
-          if (res && res.rows.length > 0) {
-            await db.query('UPDATE device_configurations SET plc_type = $1, plc_serial_number = $2, plc_status = $3, tcu_type = $4, tcu_serial_number = $5, tcu_status = $6, body = $7 WHERE teltonika_id = $8', [message.body.plc.type, message.body.plc.serial_num, message.body.plc.link_state, message.body.tcu.type, message.body.tcu.serial_num, message.body.tcu.link_state, message.body, deviceId])
+            if (res && res.rows.length > 0) {
+              await db.query('UPDATE device_configurations SET plc_type = $1, plc_serial_number = $2, plc_status = $3, tcu_type = $4, tcu_serial_number = $5, tcu_status = $6, body = $7 WHERE teltonika_id = $8', [0, message.body.tcu.serial_num, message.body.tcu.link_state, message.body.tcu.type, message.body.tcu.serial_num, message.body.tcu.link_state, message.body, deviceId])
 
-            console.log('device configuration updated')
+              console.log('device configuration updated')
+            } else {
+              await db.query('INSERT INTO device_configurations(teltonika_id, plc_type, plc_serial_number, plc_status, tcu_type, tcu_serial_number, tcu_status, body) VALUES($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *', [deviceId, 0, message.body.tcu.serial_num, message.body.tcu.link_state, message.body.tcu.type, message.body.tcu.serial_num, message.body.tcu.link_state, message.body])
+
+              console.log('device configuration added')
+            }
           } else {
-            await db.query('INSERT INTO device_configurations(teltonika_id, plc_type, plc_serial_number, plc_status, tcu_type, tcu_serial_number, tcu_status, body) VALUES($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *', [deviceId, message.body.plc.type, message.body.plc.serial_num, message.body.plc.link_state, message.body.tcu.type, message.body.tcu.serial_num, message.body.tcu.link_state, message.body])
+            res = await db.query('SELECT * FROM device_configurations WHERE teltonika_id = $1', [deviceId])
 
-            console.log('device configuration added')
+            if (res && res.rows.length > 0) {
+              await db.query('UPDATE device_configurations SET plc_type = $1, plc_serial_number = $2, plc_status = $3, tcu_type = $4, tcu_serial_number = $5, tcu_status = $6, body = $7 WHERE teltonika_id = $8', [message.body.plc.type, message.body.plc.serial_num, message.body.plc.link_state, message.body.tcu.type, message.body.tcu.serial_num, message.body.tcu.link_state, message.body, deviceId])
+
+              console.log('device configuration updated')
+            } else {
+              await db.query('INSERT INTO device_configurations(teltonika_id, plc_type, plc_serial_number, plc_status, tcu_type, tcu_serial_number, tcu_status, body) VALUES($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *', [deviceId, message.body.plc.type, message.body.plc.serial_num, message.body.plc.link_state, message.body.tcu.type, message.body.tcu.serial_num, message.body.tcu.link_state, message.body])
+
+              console.log('device configuration added')
+            }
           }
 
           console.log('teltonika-id:', deviceId, message.body)
@@ -195,7 +209,7 @@ const printMessage = async function (message) {
       group.timestamp = converter(message.body, offset, 4) // group timestamp
       const deviceType = converter(message.body, offset, 2) // device type - (03 f3) -> (1011)
       const deviceSerialNumber = converter(message.body, offset, 4) // device serial number
-      
+
       const machine = json_machines.find((item) => item.device_type === deviceType)
 
       const machineId = machine ? machine.id : 11
@@ -241,11 +255,11 @@ const printMessage = async function (message) {
             }
           }
         }
-        
+
         const date = new Date(group.timestamp * 1000)
 
         console.log('teltonika-id:', deviceId, 'Plc Serial Number', deviceSerialNumber, 'tag id:', val.id, 'timestamp:', date.toISOString(), 'configuration:', machineId, plctag.name, 'values:', JSON.stringify(val.values), 'machineID', machineId)
-        
+
         const queryValuesWithTimeData = [deviceId, machineId, val.id, group.timestamp, JSON.stringify(val.values), date.toISOString(), deviceSerialNumber]  // queryValues for device_data and alarms
         const queryValuesWithoutTimeData = [deviceId, machineId, val.id, group.timestamp, JSON.stringify(val.values), deviceSerialNumber]  // queryValues for others
 
@@ -286,7 +300,7 @@ const printMessage = async function (message) {
           //   timestamp: group.timestamp
           // })
         }
-        
+
         rowsToInsert.push(queryValuesWithTimeData)
 
         sendingData.push({
@@ -296,6 +310,28 @@ const printMessage = async function (message) {
             'values': val.values
           }
         })
+
+        try { // eslint-disable-next-line
+          const conditions = await db.query('SELECT * FROM thresholds WHERE serial_number = $1 AND tag_id = $2 AND message_status = $3', [deviceId, val.id, false])
+          let value = 0
+
+          // eslint-disable-next-line no-await-in-loop
+          await Promise.all(conditions.rows.map(async (condition) => {
+            if (condition.bytes) {
+              value = (val.values[0] >> condition.offset) & condition.bytes
+            } else {
+              value = val.values[condition.offset] / condition.multipled_by
+            }
+
+            if (compareThreshold(value, condition.operator, condition.value)) {
+              console.log('Threshold option matched ', condition)
+              await db.query('UPDATE thresholds SET message_status = $1, last_triggered_at = $2 WHERE id = $3', [true, date.toISOString(), parseInt(condition.id)])
+              console.log('Threshold updated')
+            }
+          }))
+        } catch (error) {
+          console.log(error)
+        }
       }
     }
 
@@ -309,7 +345,7 @@ const printMessage = async function (message) {
       const promises = []
 
       promises.push(db.query(pgFormat(buildInsert('device_data'), rowsToInsert)))
-      
+
       insertRows.forEach((insert) => {
         if (insert.rows.length)
           promises.push(db.query(pgFormat(buildInsert(insert.table), insert.rows)))
@@ -324,6 +360,25 @@ const printMessage = async function (message) {
       console.log('Inserting into database failed.')
       console.log(error)
     }
+  }
+}
+
+function compareThreshold(actualValue, operator, targetValue) {
+  switch (operator) {
+  case 'Equals':
+    return actualValue === Number(targetValue)
+  case 'Does not equal':
+    return actualValue !== Number(targetValue)
+  case 'Is greater than':
+    return actualValue > Number(targetValue)
+  case 'Is greater than or equal to':
+    return actualValue >= Number(targetValue)
+  case 'Is less than':
+    return actualValue < Number(targetValue)
+  case 'Is less than or equal to':
+    return actualValue <= Number(targetValue)
+  default:
+    return false
   }
 }
 

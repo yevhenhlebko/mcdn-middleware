@@ -325,7 +325,9 @@ const printMessage = async function (message) {
 
             if (compareThreshold(value, condition.operator, condition.value)) {
               console.log('Threshold option matched ', condition)
-              await db.query('UPDATE thresholds SET message_status = $1, last_triggered_at = $2 WHERE id = $3', [true, date.toISOString(), parseInt(condition.id)])
+              const estTime = date - 60 * 60 * 4 * 1000
+
+              await db.query('UPDATE thresholds SET message_status = $1, last_triggered_at = $2 WHERE id = $3', [true, estTime.toISOString(), parseInt(condition.id)])
               console.log('Threshold updated')
             }
           }))

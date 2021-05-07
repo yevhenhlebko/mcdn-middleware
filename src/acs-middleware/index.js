@@ -43,6 +43,7 @@ function buildInsert(table) {
 
 const printMessage = async function (message) {
   let deviceId = 0
+  let res
 
   if (!message) {
     // message has an error
@@ -284,14 +285,56 @@ const printMessage = async function (message) {
         // check if the tag is alarms
         try { // eslint-disable-next-line
           res = await db.query('SELECT * FROM alarm_types WHERE machine_id = $1 AND tag_id = $2', [machineId, val.id])
-        } catch (error) {
-          console.log('Qeury from tags table failed.')
 
-          return
-        }
+          if (res && res.rows.length > 0) {
+            alarmsRowsToInsert.push(queryValuesWithTimeData)
+            // check if the alarm is activated or deactivated
+            for (let j = 0; j < res.rows.length; j ++) {
+              try { // eslint-disable-next-line
+                const alarmData = await db.query('SELECT * FROM alarm_status WHERE tag_id = $1 AND machine_id = $2 AND device_id = $3 AND "offset" = $4 ORDER BY timestamp DESC LIMIT 1', [val.id, machineId, deviceId, res.rows[j].offset])
 
-        if (res && res.rows.length > 0) {
-          alarmsRowsToInsert.push(queryValuesWithTimeData)
+                // if there is matching data with streaming data, compare that two values
+                if (alarmData && alarmData.rows.length > 0) {
+                  // calculate value of datas
+                  const previousValue = alarmData.rows[0].is_activate
+                  const streamingValue = parseInt(res.rows[j].bytes) ? (parseInt(val.values[0]) >> res.rows[j].offset) & res.rows[j].bytes : val.values[res.rows[j].offset]
+
+                  // compare the values and determine if streaming alarm is activate or deactivate
+                  if (previousValue && !streamingValue) {
+                    try { // eslint-disable-next-line
+                        await db.query('INSERT INTO alarm_status(device_id, tag_id, "offset", timestamp, machine_id, is_activate) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *', [deviceId, parseInt(res.rows[j].tag_id), res.rows[j].offset, date.getTime(), machineId, false])
+                      console.log('Alarm history has been updated')
+                    } catch (error) {
+                      console.log(error)
+                    }
+                  } else if (!previousValue && streamingValue) {
+                    try { // eslint-disable-next-line
+                        await db.query('INSERT INTO alarm_status(device_id, tag_id, "offset", timestamp, machine_id, is_activate) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *', [deviceId, parseInt(res.rows[j].tag_id), res.rows[j].offset, date.getTime(), machineId, true])
+                      console.log('Alarm history has been updated')
+                    } catch (error) {
+                      console.log(error)
+                    }
+                  }
+                }
+                // if there is no matching data, save active alarms in the table
+                else {
+                  // get value of streaming data
+                  const streamingValue = parseInt(res.rows[j].bytes) ? (parseInt(val.values[0]) >> res.rows[j].offset) & res.rows[j].bytes : val.values[res.rows[j].offset]
+
+                  // check streaming value if the alarm is activate
+                  if (streamingValue) {
+                    try { // eslint-disable-next-line
+                      await db.query('INSERT INTO alarm_status(device_id, tag_id, "offset", timestamp, machine_id, is_activate) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *', [deviceId, parseInt(res.rows[j].tag_id), parseInt(res.rows[j].offset), date.getTime(), machineId, true])
+                      console.log('Alarm history has been updated')
+                    } catch (error) {
+                      console.log(error)
+                    }
+                  }
+                }
+              } catch (error) {
+                console.log(error)
+              }
+            }
           // pusher.trigger('product.alarm.channel', 'alarm.created', {
           //   deviceId: deviceId,
           //   machineId: machineId,
@@ -299,6 +342,11 @@ const printMessage = async function (message) {
           //   values: val.values,
           //   timestamp: group.timestamp
           // })
+          }
+        } catch (error) {
+          console.log('Query from tags table failed.')
+
+          return
         }
 
         rowsToInsert.push(queryValuesWithTimeData)
@@ -315,6 +363,7 @@ const printMessage = async function (message) {
           const conditions = await db.query('SELECT * FROM thresholds WHERE serial_number = $1 AND tag_id = $2 AND message_status = $3', [deviceId, val.id, false])
           let value = 0
 
+          // check for the default threshold conditions
           // eslint-disable-next-line no-await-in-loop
           await Promise.all(conditions.rows.map(async (condition) => {
             if (condition.bytes) {
@@ -324,11 +373,41 @@ const printMessage = async function (message) {
             }
 
             if (compareThreshold(value, condition.operator, condition.value)) {
-              console.log('Threshold option matched ', condition)
-              const estTime = date - 60 * 60 * 4 * 1000
+              console.log('Threshold option matched ')
+              const estTime = new Date(date - 60 * 60 * 4 * 1000)
 
-              await db.query('UPDATE thresholds SET message_status = $1, last_triggered_at = $2 WHERE id = $3', [true, estTime.toISOString(), parseInt(condition.id)])
-              console.log('Threshold updated')
+              try {
+                await db.query('UPDATE thresholds SET message_status = $1, last_triggered_at = $2 WHERE id = $3', [true, estTime.toISOString(), parseInt(condition.id)])
+                console.log('Threshold updated')
+              } catch (error) {
+                console.log(error)
+              }
+            }
+          }))
+
+          // check for the approaching conditions
+          // eslint-disable-next-line
+          const approaching_conditions = await db.query('SELECT * FROM thresholds WHERE serial_number = $1 AND tag_id = $2 AND approaching_status = $3', [deviceId, val.id, false])
+
+          // eslint-disable-next-line no-await-in-loop
+          await Promise.all(approaching_conditions.rows.map(async (condition) => {
+            if (condition.bytes) {
+              value = (val.values[0] >> condition.offset) & condition.bytes
+            } else {
+              value = val.values[condition.offset] / condition.multipled_by
+            }
+
+            if (compareThreshold(value, condition.operator, condition.approaching)) {
+              console.log('Threshold approaching option matched ')
+
+              const estTime = new Date(date - 60 * 60 * 4 * 1000)
+
+              try {
+                await db.query('UPDATE thresholds SET approaching_status = $1, approaching_triggered_time = $2 WHERE id = $3', [true, estTime.toISOString(), parseInt(condition.id)])
+                console.log('Threshold updated')
+              } catch (error) {
+                console.log(error)
+              }
             }
           }))
         } catch (error) {
@@ -340,9 +419,11 @@ const printMessage = async function (message) {
           try { //eslint-disable-next-line
             const res = await db.query('SELECT * FROM device_data WHERE serial_number = $1 AND tag_id = $2 ORDER BY timestamp DESC limit 1', [deviceSerialNumber, 15])
 
+            // get total amount of last inventory and streaming inventory
             lastInv = arrSum(JSON.parse(res.rows.values))
             currentInv = arrSum(val.values)
 
+            // if the total amount of streaming inventory is bigger than last inventory, it means the hopper cleared
             if (currentInv < lastInv) { // eslint-disable-next-line
               const cleared = await db.query('SELECT * FROM hopper_cleared_time WHERE serial_number = $1', [deviceSerialNumber])
 

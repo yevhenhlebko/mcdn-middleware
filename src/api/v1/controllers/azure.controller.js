@@ -16,7 +16,7 @@ function receiveFeedback(err, receiver) {
 }
 
 module.exports = {
-  sendMessage: (req, res) => {
+  sendMessage: (req, res) => { // eslint-disable-line
     try {
       if (!connectionString) {
         console.log('Please set the connectionString environment variable.')
@@ -36,7 +36,7 @@ module.exports = {
 
       const serviceClient = Client.fromConnectionString(connectionString)
 
-      serviceClient.open(function (err) {
+      serviceClient.open((err) => { // eslint-disable-line
         if (err) {
           console.error('Could not connect: ' + err.message)
 
@@ -50,7 +50,7 @@ module.exports = {
           message.ack = 'full'
           message.messageId = 'My Message ID'
 
-          serviceClient.send(req.body.targetDevice, message, function (err) {
+          serviceClient.send(req.body.targetDevice, message, (err) => {
             if (err) {
               console.error(err.toString())
 

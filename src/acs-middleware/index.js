@@ -157,6 +157,7 @@ const printMessage = async function (message) {
   const snMonthRowsToInsert = []
   const snYearRowsToInsert = []
   const snUnitRowsToInsert = []
+  const idleRowsToInsert = []
 
   const insertRows = [{
     property: 'capacity_utilization',
@@ -170,6 +171,10 @@ const printMessage = async function (message) {
     property: 'running',
     table: 'runnings',
     rows: runningRowsToInsert
+  }, {
+    property: 'idle',
+    table: 'idle',
+    rows: idleRowsToInsert
   }, {
     property: 'device_type',
     table: 'device_types',
